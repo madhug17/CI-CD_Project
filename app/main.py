@@ -24,7 +24,7 @@ class NewsInput(BaseModel):
 # ProsusAI/finbert label order: 0=positive, 1=negative, 2=neutral
 # We rename to financial terms for the response.
 # =========================================================
-LABELS = {0: "Bearish", 1: "Neutral", 2: "Bullish"}
+
 # =========================================================
 # LOAD MODEL ON STARTUP
 # =========================================================
@@ -35,13 +35,15 @@ try:
     tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
     model = AutoModelForSequenceClassification.from_pretrained(MODEL_PATH)
     model.eval()   # set to inference mode — disables dropout
+    LABELS = model.config.id2label
     print("Model loaded successfully! Ready for inference.")
 except Exception as e:
     print(f"CRITICAL ERROR: Could not load model. Did you run train.py first?\nError: {e}")
     tokenizer = None
     model = None
+    LABELS = {0: "Bearish", 1: "Neutral", 2: "Bullish"}
 
-LABELS = model.config.id2label
+
 # =========================================================
 # HEALTH CHECK
 # =========================================================
