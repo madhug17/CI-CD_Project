@@ -76,7 +76,10 @@ async def predict_sentiment(news: NewsInput):
         )
 
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    payload = {"inputs": news.text}
+    payload = {
+        "inputs": news.text,
+        "options": {"wait_for_model": True} 
+    }
 
     # --------------------------------------------------
     # 2. Call HuggingFace — with cold start retry
