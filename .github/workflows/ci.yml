@@ -14,4 +14,6 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run tests
+        env:
+          MODEL_NAME: "yiyanghk/finbert-tone"
         run: python -m pytest tests/test_api.py

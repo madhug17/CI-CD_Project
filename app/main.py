@@ -3,6 +3,8 @@ from pydantic import BaseModel
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 import torch.nn.functional as F
+import os 
+
 
 # =========================================================
 # APP
@@ -28,7 +30,7 @@ class NewsInput(BaseModel):
 # =========================================================
 # LOAD MODEL ON STARTUP
 # =========================================================
-MODEL_PATH = "./app/saved_model"
+MODEL_PATH = os.getenv("MODEL_NAME", "yiyanghk/finbert-tone")
 
 try:
     print(f"Loading model from {MODEL_PATH}...")
