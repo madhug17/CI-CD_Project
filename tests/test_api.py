@@ -1,10 +1,12 @@
 import sys 
 import os 
+import dotenv
+dotenv.load_dotenv()
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 
 # Fix 3: Set the environment variable BEFORE importing the app!
 # Fix 4: Add 'ust' to the model name!
-os.environ["MODEL_PATH"] = "yiyanghkust/finbert-tone"
+os.environ["HUGGING_FACE"] = os.getenv("HUGGING_FACE", "fake_test_token")
 
 import pytest 
 from fastapi.testclient import TestClient

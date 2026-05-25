@@ -1,18 +1,17 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-import torch
-import torch.nn.functional as F
+import requests
 import os 
-
+import dotenv
+dotenv.load_dotenv()
 
 # =========================================================
 # APP
 # =========================================================
 app = FastAPI(
-    title="FinBERT Sentiment API",
-    description="Financial news sentiment — Bullish / Bearish / Neutral",
-    version="1.0.0"
+    title="FinBERT Sentiment API (Serverless)",
+    description="Lightweight API Gateway pointing to Hugging Face Inference API",
+    version="2.0.0"
 )
 
 # =========================================================
@@ -22,29 +21,12 @@ class NewsInput(BaseModel):
     text: str
 
 # =========================================================
-# LABEL MAPPING
-# ProsusAI/finbert label order: 0=positive, 1=negative, 2=neutral
-# We rename to financial terms for the response.
+# SERVERLESS CONFIGURATION
 # =========================================================
-
-# =========================================================
-# LOAD MODEL ON STARTUP
-# =========================================================
-MODEL_PATH = os.getenv("MODEL_PATH", "yiyanghkust/finbert-tone")
-
-try:
-    print(f"Loading model from {MODEL_PATH}...")
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
-    model = AutoModelForSequenceClassification.from_pretrained(MODEL_PATH)
-    model.eval()   # set to inference mode — disables dropout
-    LABELS = model.config.id2label
-    print("Model loaded successfully! Ready for inference.")
-except Exception as e:
-    print(f"CRITICAL ERROR: Could not load model. Did you run train.py first?\nError: {e}")
-    tokenizer = None
-    model = None
-    LABELS = {0: "Bearish", 1: "Neutral", 2: "Bullish"}
-
+# The URL to the Hugging Face supercomputer running FinBERT
+HF_API_URL = "https://api-inference.huggingface.co/models/yiyanghkust/finbert-tone"
+# Your secret VIP pass (injected from GitHub/Render environments)
+HF_TOKEN = os.getenv("HUGGING_FACE")
 
 # =========================================================
 # HEALTH CHECK
@@ -52,70 +34,50 @@ except Exception as e:
 @app.get("/health")
 def health_check():
     """
-    Used by Docker HEALTHCHECK and CI/CD pipeline to verify
-    the server is up and the model is loaded.
+    Used by CI/CD and Render to verify the server is alive.
     """
-    if model is None or tokenizer is None:
-        raise HTTPException(status_code=503, detail="Model not loaded.")
-    return {"status": "ok", "model_path": MODEL_PATH}
-
+    return {"status": "ok", "architecture": "serverless"}
 
 # =========================================================
-# PREDICT
+# PREDICT (Forwarded to Hugging Face)
 # =========================================================
 @app.post("/predict")
 async def predict_sentiment(news: NewsInput):
-
-    if model is None or tokenizer is None:
+    # 1. Check if we have the VIP pass
+    if not HF_TOKEN:
         raise HTTPException(
-            status_code=500,
-            detail="Model not initialized. Run train.py first."
+            status_code=500, 
+            detail="HF_TOKEN environment variable is missing. Check your Render/GitHub secrets."
         )
 
-    # --------------------------------------------------
-    # 1. Tokenize
-    # --------------------------------------------------
-    inputs = tokenizer(
-        news.text,
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-        max_length=128
-    )
+    # 2. Package the text for Hugging Face
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    payload = {"inputs": news.text}
 
-    # --------------------------------------------------
-    # 2. Forward pass
-    # --------------------------------------------------
-    with torch.no_grad():
-        outputs = model(**inputs)
+    # 3. Ping the supercomputer
+    response = requests.post(HF_API_URL, headers=headers, json=payload)
+    
+    # 4. Handle any errors from Hugging Face
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=response.status_code, 
+            detail=f"Hugging Face API Error: {response.text}"
+        )
 
-    # --------------------------------------------------
-    # 3. Softmax → probabilities
-    # outputs.logits shape: [batch=1, num_classes=3]
-    # probs shape:          [batch=1, num_classes=3]
-    # --------------------------------------------------
-    probs = F.softmax(outputs.logits, dim=-1)
+    # 5. Parse the results
+    # Hugging Face returns data in this format: [[{'label': 'Neutral', 'score': 0.8}, ...]]
+    hf_data = response.json() 
+    
+    # Find the label with the highest score
+    top_pred = max(hf_data, key=lambda x: x['score'])
+    
+    # Format probabilities cleanly for the API response
+    probs = {item['label']: round(item['score'], 4) for item in hf_data}
 
-    # --------------------------------------------------
-    # 4. Argmax → predicted class
-    # predicted_class shape: [batch=1]
-    # --------------------------------------------------
-    confidence, predicted_class = torch.max(probs, dim=1)
-
-    # --------------------------------------------------
-    # 5. Build response
-    # probs[0] = first (only) item in the batch → shape [3]
-    # probs[0][0] = Bullish prob (scalar) → .item() works
-    # probs[0][1] = Bearish prob
-    # probs[0][2] = Neutral prob
-    # --------------------------------------------------
+    # 6. Return the exact same JSON schema your old PyTorch code used!
     return {
-        "headline":        news.text,
-        "prediction":      LABELS[predicted_class.item()],
-        "confidence":      round(confidence.item(), 4),
-        "probabilities": {
-            "Bullish": round(probs[0][2].item(), 4),
-            "Bearish": round(probs[0][0].item(), 4),
-            "Neutral": round(probs[0][1].item(), 4),
-        }
+        "headline": news.text,
+        "prediction": top_pred['label'],
+        "confidence": round(top_pred['score'], 4),
+        "probabilities": probs
     }
