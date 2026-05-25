@@ -30,7 +30,7 @@ class NewsInput(BaseModel):
 # =========================================================
 # LOAD MODEL ON STARTUP
 # =========================================================
-MODEL_PATH = os.getenv("MODEL_NAME", "yiyanghk/finbert-tone")
+MODEL_PATH = os.getenv("MODEL_PATH", "yiyanghkust/finbert-tone")
 
 try:
     print(f"Loading model from {MODEL_PATH}...")
