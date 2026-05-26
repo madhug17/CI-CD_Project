@@ -53,7 +53,7 @@ def health_check():
         "status":       "ok",
         "architecture": "serverless",
         "model":        HF_API_URL,
-        "token_set":    HF_TOKEN is not None   # confirms env var is loaded
+        "token_set":    HF_TOKEN is not None
     }
 
 
@@ -77,29 +77,31 @@ async def predict_sentiment(news: NewsInput):
 
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     payload = {
-        "inputs": news.text,
-        "options": {"wait_for_model": True} 
+        "inputs":  news.text,
+        "options": {"wait_for_model": True}  # handles cold start on HF side
     }
 
     # --------------------------------------------------
-    # 2. Call HuggingFace — with cold start retry
+    # 2. Call HuggingFace — with cold start retry as backup
+    # wait_for_model handles most cold starts automatically,
+    # but we keep the 503 retry as a safety net
     # --------------------------------------------------
     try:
         response = requests.post(
             HF_API_URL,
             headers=headers,
             json=payload,
-            timeout=30        # don't hang forever
+            timeout=60        # longer timeout since wait_for_model can take ~30s
         )
 
         if response.status_code == 503:
-            print("HuggingFace model is cold starting — waiting 20s and retrying...")
+            print("HuggingFace still loading — waiting 20s and retrying...")
             time.sleep(20)
             response = requests.post(
                 HF_API_URL,
                 headers=headers,
                 json=payload,
-                timeout=30
+                timeout=60
             )
 
     except requests.exceptions.Timeout:
@@ -115,7 +117,7 @@ async def predict_sentiment(news: NewsInput):
         )
 
     # --------------------------------------------------
-    # 3. Handle explicit HuggingFace errors
+    # 3. Handle explicit HuggingFace HTTP errors
     # --------------------------------------------------
     if response.status_code != 200:
         raise HTTPException(
@@ -124,31 +126,38 @@ async def predict_sentiment(news: NewsInput):
         )
 
     # --------------------------------------------------
-    # 4. Parse response safely (The Bulletproof Block)
+    # 4. Parse response safely
     # --------------------------------------------------
     try:
         raw = response.json()
 
-        # Guard 1: Did HF send a hidden error inside a dictionary?
+        # Guard 1: HF sometimes returns {"error": "..."} with a 200 status
         if isinstance(raw, dict) and "error" in raw:
-            raise ValueError(f"HuggingFace threw an error: {raw['error']}")
+            raise ValueError(f"HuggingFace returned an error: {raw['error']}")
 
-        # Guard 2: Is it a nested list [[{...}]] or a flat list [{...}]?
+        # Guard 2: unwrap the response correctly
+        # Check raw[0] — the FIRST ELEMENT — to know the structure:
+        #   raw = [[{label, score}, ...]]  → raw[0] is a list  → nested, use raw[0]
+        #   raw = [{label, score}, ...]    → raw[0] is a dict  → flat, use raw directly
         if isinstance(raw, list) and len(raw) > 0:
-            if isinstance(raw, list):
-                hf_data = raw  # It's nested, grab the inner list
-            elif isinstance(raw, dict):
-                hf_data = raw     # It's flat, use it directly
+            if isinstance(raw[0], list):
+                hf_data = raw[0]    # nested [[{...}]] — unwrap outer list
+            elif isinstance(raw[0], dict):
+                hf_data = raw       # flat [{...}] — already correct
             else:
-                raise ValueError(f"Unknown list format: {raw}")
+                raise ValueError(f"Unknown list element format: {type(raw[0])} | raw: {raw}")
+        elif isinstance(raw, dict):
+            hf_data = [raw]         # single dict response — wrap in list
         else:
-            raise ValueError(f"Empty or weird response: {raw}")
+            raise ValueError(f"Empty or unexpected response format: {raw}")
 
-        # Now it is safe to grab the max score
+        # --------------------------------------------------
+        # 5. Get top prediction
+        # --------------------------------------------------
         top_pred = max(hf_data, key=lambda x: x.get("score", 0))
 
         # --------------------------------------------------
-        # 5. Build clean response
+        # 6. Build clean response
         # --------------------------------------------------
         probs = {
             LABEL_MAP.get(item.get("label"), item.get("label")): round(item.get("score", 0), 4)
@@ -163,9 +172,8 @@ async def predict_sentiment(news: NewsInput):
         }
 
     except Exception as e:
-        # If ANYTHING fails, don't crash silently. 
-        # Send the exact data straight to Streamlit so we can read it.
+        # Surface the raw HF response so you can debug exactly what came back
         raise HTTPException(
             status_code=500,
-            detail=f"Parsing Bug: {str(e)} | Raw HF Data: {response.text}"
+            detail=f"Parsing error: {str(e)} | Raw HF response: {response.text}"
         )
