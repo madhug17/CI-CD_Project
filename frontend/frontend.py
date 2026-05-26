@@ -37,7 +37,7 @@ if st.button(f"Fetch Live Pulse for {symbol}", type="primary"):
                     st.write(f"📰 **{headline}**")
                     
                     response = requests.post(
-                        "http://localhost:8000/predict",
+                        "https://ci-cd-project-01.onrender.com/predict",
                         json={"text": headline}
                     )
                     response.raise_for_status()
