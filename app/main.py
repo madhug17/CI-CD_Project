@@ -28,13 +28,13 @@ class NewsInput(BaseModel):
 # =========================================================
 # CONFIG
 # =========================================================
-HF_API_URL = "https://router.huggingface.co/hf-inference/models/yiyanghkust/finbert-tone"
+HF_API_URL = "https://router.huggingface.co/hf-inference/models/ProsusAI/finbert"
 HF_TOKEN   = os.getenv("HUGGING_FACE")
 
 LABEL_MAP = {
-    "Positive": "Bullish",
-    "Negative": "Bearish",
-    "Neutral":  "Neutral"
+    "positive": "Bullish",
+    "negative": "Bearish",
+    "neutral":  "Neutral"
 }
 
 
