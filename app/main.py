@@ -83,8 +83,6 @@ async def predict_sentiment(news: NewsInput):
 
     # --------------------------------------------------
     # 2. Call HuggingFace — with cold start retry
-    # Free tier cold starts the model if unused for a while.
-    # First request returns 503 "model is loading" → wait 20s → retry once.
     # --------------------------------------------------
     try:
         response = requests.post(
@@ -117,7 +115,7 @@ async def predict_sentiment(news: NewsInput):
         )
 
     # --------------------------------------------------
-    # 3. Handle HuggingFace errors
+    # 3. Handle explicit HuggingFace errors
     # --------------------------------------------------
     if response.status_code != 200:
         raise HTTPException(
@@ -126,28 +124,48 @@ async def predict_sentiment(news: NewsInput):
         )
 
     # --------------------------------------------------
-    # 4. Parse response
-    # HuggingFace returns a NESTED list:
-    #   [[{'label': 'Positive', 'score': 0.94}, ...]]
-    #    ^^outer list  ^^inner list = actual predictions
-    # Must index [0] to get the inner list before calling max()
+    # 4. Parse response safely (The Bulletproof Block)
     # --------------------------------------------------
-    raw     = response.json()
-    hf_data = raw[0]           # inner list — list of {label, score} dicts
+    try:
+        raw = response.json()
 
-    top_pred = max(hf_data, key=lambda x: x["score"])
+        # Guard 1: Did HF send a hidden error inside a dictionary?
+        if isinstance(raw, dict) and "error" in raw:
+            raise ValueError(f"HuggingFace threw an error: {raw['error']}")
 
-    # --------------------------------------------------
-    # 5. Build clean response
-    # --------------------------------------------------
-    probs = {
-        LABEL_MAP.get(item["label"], item["label"]): round(item["score"], 4)
-        for item in hf_data
-    }
+        # Guard 2: Is it a nested list [[{...}]] or a flat list [{...}]?
+        if isinstance(raw, list) and len(raw) > 0:
+            if isinstance(raw, list):
+                hf_data = raw  # It's nested, grab the inner list
+            elif isinstance(raw, dict):
+                hf_data = raw     # It's flat, use it directly
+            else:
+                raise ValueError(f"Unknown list format: {raw}")
+        else:
+            raise ValueError(f"Empty or weird response: {raw}")
 
-    return {
-        "headline":      news.text,
-        "prediction":    LABEL_MAP.get(top_pred["label"], top_pred["label"]),
-        "confidence":    round(top_pred["score"], 4),
-        "probabilities": probs
-    }
+        # Now it is safe to grab the max score
+        top_pred = max(hf_data, key=lambda x: x.get("score", 0))
+
+        # --------------------------------------------------
+        # 5. Build clean response
+        # --------------------------------------------------
+        probs = {
+            LABEL_MAP.get(item.get("label"), item.get("label")): round(item.get("score", 0), 4)
+            for item in hf_data
+        }
+
+        return {
+            "headline":      news.text,
+            "prediction":    LABEL_MAP.get(top_pred.get("label"), top_pred.get("label")),
+            "confidence":    round(top_pred.get("score", 0), 4),
+            "probabilities": probs
+        }
+
+    except Exception as e:
+        # If ANYTHING fails, don't crash silently. 
+        # Send the exact data straight to Streamlit so we can read it.
+        raise HTTPException(
+            status_code=500,
+            detail=f"Parsing Bug: {str(e)} | Raw HF Data: {response.text}"
+        )
